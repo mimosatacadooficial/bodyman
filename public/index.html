@@ -618,6 +618,13 @@ function scrollToComprar(){
     link.addEventListener('click', function(e) {
       var href = link.getAttribute('href');
       if (href && !href.startsWith('#') && !href.startsWith('javascript:')) {
+        // Se for um link de checkout comum (não o botão do popup), registra que o usuário foi para o checkout
+        if (link.id !== 'exitPopupBtn') {
+          try {
+            sessionStorage.setItem('bodyman_went_to_checkout', 'true');
+            localStorage.setItem('bodyman_went_to_checkout', Date.now().toString());
+          } catch(err) {}
+        }
         e.preventDefault();
         var finalUrl = appendSearchParams(href);
         try {
@@ -630,16 +637,13 @@ function scrollToComprar(){
   });
 })();
 
-// Back-redirect & Exit Intent Popup de Alta Conversão
+// Back-redirect & Exit Intent Popup de Alta Conversão com Detecção de Retorno do Checkout
 (function() {
-  var popupShown = false;
   var popup = document.getElementById('exitPopup');
   if (!popup) return;
   var timerInterval = null;
 
   function showPopup() {
-    if (popupShown) return;
-    popupShown = true;
     popup.classList.add('active');
     document.body.style.overflow = 'hidden';
     startPopupTimer();
@@ -650,44 +654,76 @@ function scrollToComprar(){
     document.body.style.overflow = '';
   }
 
-  // 1. Back-Redirect: intercepta o botão de voltar no navegador e gestos de voltar no celular
-  function setupBackRedirect() {
+  // 1. DETECÇÃO DE RETORNO DO CHECKOUT (Força aparição imediata se voltou do checkout)
+  function checkCheckoutReturn() {
     try {
-      window.history.pushState({ page: 'landing' }, '', window.location.href);
-      window.addEventListener('popstate', function(e) {
-        if (!popupShown) {
-          window.history.pushState({ page: 'special_offer' }, '', window.location.href);
+      var sessionFlag = sessionStorage.getItem('bodyman_went_to_checkout');
+      var localTime = localStorage.getItem('bodyman_went_to_checkout');
+      var isRecent = localTime && (Date.now() - parseInt(localTime, 10) < 1800000); // até 30 minutos
+
+      if (sessionFlag === 'true' || isRecent) {
+        sessionStorage.removeItem('bodyman_went_to_checkout');
+        localStorage.removeItem('bodyman_went_to_checkout');
+        setTimeout(function() {
           showPopup();
-        }
-      });
-    } catch(err) {
-      console.warn('Back-redirect error:', err);
-    }
+        }, 150);
+        return true;
+      }
+    } catch(e) {}
+    return false;
   }
 
-  setupBackRedirect();
+  // Dispara tanto no carregamento inicial quanto ao voltar do checkout via botão voltar (bfcache)
+  window.addEventListener('pageshow', function(e) {
+    if (e.persisted) {
+      showPopup();
+    } else {
+      checkCheckoutReturn();
+    }
+  });
 
-  // Garante registro adicional no histórico no primeiro toque/scroll (essencial para iOS e Chrome mobile)
-  var registerHistoryOnTouch = function() {
+  // Também verifica ao recuperar o foco da janela/aba
+  window.addEventListener('focus', function() {
+    checkCheckoutReturn();
+  });
+
+  // Verificação imediata no carregamento do script
+  checkCheckoutReturn();
+
+  // 2. FORÇAR BACK-REDIRECT (Intercepta 100% das tentativas de voltar e força o popup)
+  function pushBackTrap() {
     try {
-      window.history.pushState({ page: 'active' }, '', window.location.href);
+      window.history.pushState({ page: 'bodyman_trap' }, '', window.location.href);
     } catch(e) {}
-    window.removeEventListener('touchstart', registerHistoryOnTouch);
-    window.removeEventListener('scroll', registerHistoryOnTouch);
-    window.removeEventListener('click', registerHistoryOnTouch);
-  };
-  window.addEventListener('touchstart', registerHistoryOnTouch, { passive: true });
-  window.addEventListener('scroll', registerHistoryOnTouch, { passive: true });
-  window.addEventListener('click', registerHistoryOnTouch, { passive: true });
+  }
 
-  // 2. Desktop Exit Intent (mouse saindo da página pelo topo)
+  // Empurra estados no histórico
+  pushBackTrap();
+  pushBackTrap();
+
+  // Ao clicar em voltar no navegador ou gesto no celular:
+  window.addEventListener('popstate', function(e) {
+    // Re-injeta novo estado imediatamente para não permitir saída e força a exibição do popup
+    pushBackTrap();
+    showPopup();
+  });
+
+  // Re-injeta histórico em qualquer interação do usuário (toque, rolagem, clique)
+  var ensureTrap = function() {
+    pushBackTrap();
+  };
+  window.addEventListener('touchstart', ensureTrap, { passive: true });
+  window.addEventListener('scroll', ensureTrap, { passive: true });
+  window.addEventListener('click', ensureTrap, { passive: true });
+
+  // 3. Desktop Exit Intent (mouse saindo pelo topo da janela)
   document.addEventListener('mouseleave', function(e) {
-    if (e.clientY <= 10 && !popupShown) {
+    if (e.clientY <= 30) {
       showPopup();
     }
   });
 
-  // 3. Mobile Exit Intent (puxar para baixo no topo da tela)
+  // 4. Mobile Exit Intent (gesto de puxar para baixo no topo da tela)
   var touchStartY = 0;
   document.addEventListener('touchstart', function(e) {
     if (e.touches && e.touches[0]) {
@@ -699,15 +735,15 @@ function scrollToComprar(){
     if (e.touches && e.touches[0]) {
       var touchY = e.touches[0].clientY;
       var scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-      if (scrollTop <= 0 && touchY > touchStartY + 90) {
+      if (scrollTop <= 0 && touchY > touchStartY + 80) {
         showPopup();
       }
     }
   }, { passive: true });
 
-  // 4. Mudança de aba / minimizar
+  // 5. Mudança de aba / minimizar
   document.addEventListener('visibilitychange', function() {
-    if (document.visibilityState === 'hidden' && !popupShown) {
+    if (document.visibilityState === 'hidden') {
       showPopup();
     }
   });
