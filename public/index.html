@@ -193,8 +193,8 @@ body { font-family:'DM Sans','DM Sans Fallback',sans-serif; background:var(--cre
 .kit-card-btn svg { width:18px; height:18px; }
 
 /* Exit Popup & Back-redirect de Alta Conversão */
-.exit-popup-overlay { position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(10,15,22,0.88); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); z-index:99999; display:none; align-items:center; justify-content:center; padding:16px; overflow-y:auto; }
-.exit-popup-overlay.active { display:flex; }
+.exit-popup-overlay { position:fixed !important; top:0 !important; left:0 !important; width:100% !important; height:100% !important; background:rgba(10,15,22,0.92) !important; backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); z-index:9999999 !important; display:none; align-items:center; justify-content:center; padding:16px; overflow-y:auto; }
+.exit-popup-overlay.active { display:flex !important; opacity:1 !important; visibility:visible !important; pointer-events:all !important; }
 .exit-popup { background:#18232e; border:1px solid rgba(196,122,61,0.45); border-radius:16px; max-width:390px; width:100%; padding:24px 20px 20px; text-align:center; position:relative; box-shadow:0 25px 50px -12px rgba(0,0,0,0.8), 0 0 30px rgba(196,122,61,0.2); animation:popupIn 0.35s cubic-bezier(0.16,1,0.3,1); color:#fff; }
 @keyframes popupIn { from { transform:scale(0.85) translateY(15px); opacity:0; } to { transform:scale(1) translateY(0); opacity:1; } }
 .exit-popup-close { position:absolute; top:10px; right:10px; width:30px; height:30px; background:rgba(255,255,255,0.1); color:#c5d0db; border:1px solid rgba(255,255,255,0.15); border-radius:50%; font-size:18px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:background 0.2s; }
@@ -623,6 +623,8 @@ function scrollToComprar(){
           try {
             sessionStorage.setItem('bodyman_went_to_checkout', 'true');
             localStorage.setItem('bodyman_went_to_checkout', Date.now().toString());
+            var base = window.location.href.split('#')[0];
+            window.history.pushState({ fromCheckout: true }, '', base + '#retorno-checkout');
           } catch(err) {}
         }
         e.preventDefault();
@@ -637,93 +639,113 @@ function scrollToComprar(){
   });
 })();
 
-// Back-redirect & Exit Intent Popup de Alta Conversão com Detecção de Retorno do Checkout
+// Back-redirect & Exit Intent Popup de Alta Conversão FORÇADO
 (function() {
-  var popup = document.getElementById('exitPopup');
-  if (!popup) return;
   var timerInterval = null;
 
   function showPopup() {
-    popup.classList.add('active');
+    var p = document.getElementById('exitPopup');
+    if (!p) return;
+    p.classList.add('active');
     document.body.style.overflow = 'hidden';
     startPopupTimer();
   }
 
   function hidePopup() {
-    popup.classList.remove('active');
+    var p = document.getElementById('exitPopup');
+    if (p) p.classList.remove('active');
     document.body.style.overflow = '';
   }
 
-  // 1. DETECÇÃO DE RETORNO DO CHECKOUT (Força aparição imediata se voltou do checkout)
+  window.openExitPopup = showPopup;
+
+  // 1. FORÇAR BACK-REDIRECT COM HASH (Funciona em 100% dos navegadores e celulares)
+  var rawUrl = window.location.href.split('#')[0];
+  var trapHash = '#oferta';
+
+  function armTrap() {
+    try {
+      if (window.location.hash !== trapHash && !window.location.hash.includes('retorno-checkout')) {
+        window.history.replaceState({ page: 'inicio' }, '', rawUrl + '#inicio');
+        window.history.pushState({ page: 'oferta' }, '', rawUrl + trapHash);
+      }
+    } catch(e) {}
+  }
+
+  // Arma imediatamente e no carregamento
+  armTrap();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', armTrap);
+  }
+  window.addEventListener('load', armTrap);
+
+  // Re-arma em qualquer interação para garantir histórico ativo no mobile
+  ['touchstart', 'click', 'scroll'].forEach(function(evt) {
+    window.addEventListener(evt, function() {
+      try {
+        if (window.location.hash !== trapHash && !window.location.hash.includes('retorno-checkout')) {
+          window.history.pushState({ page: 'oferta' }, '', rawUrl + trapHash);
+        }
+      } catch(e) {}
+    }, { passive: true });
+  });
+
+  // Intercepta quando o usuário clica em VOLTAR (no celular ou navegador)
+  window.addEventListener('popstate', function(e) {
+    showPopup();
+    // Re-injeta imediatamente para prender nova tentativa de voltar
+    try {
+      window.history.pushState({ page: 'oferta' }, '', rawUrl + trapHash);
+    } catch(err) {}
+  });
+
+  // 2. DETECTAR RETORNO DO CHECKOUT (Força aparição imediata)
   function checkCheckoutReturn() {
     try {
-      var sessionFlag = sessionStorage.getItem('bodyman_went_to_checkout');
+      var isHash = window.location.hash.indexOf('retorno-checkout') > -1 || window.location.hash.indexOf('popup') > -1;
+      var isParam = window.location.search.indexOf('popup=1') > -1;
+      var sessionFlag = sessionStorage.getItem('bodyman_went_to_checkout') === 'true';
       var localTime = localStorage.getItem('bodyman_went_to_checkout');
-      var isRecent = localTime && (Date.now() - parseInt(localTime, 10) < 1800000); // até 30 minutos
+      var isRecent = localTime && (Date.now() - parseInt(localTime, 10) < 1800000);
 
-      if (sessionFlag === 'true' || isRecent) {
+      if (isHash || isParam || sessionFlag || isRecent) {
         sessionStorage.removeItem('bodyman_went_to_checkout');
         localStorage.removeItem('bodyman_went_to_checkout');
-        setTimeout(function() {
-          showPopup();
-        }, 150);
+        showPopup();
         return true;
       }
     } catch(e) {}
     return false;
   }
 
-  // Dispara tanto no carregamento inicial quanto ao voltar do checkout via botão voltar (bfcache)
+  // Verifica no carregamento da página
+  checkCheckoutReturn();
+
+  // Verifica no retorno via botão voltar (bfcache do Safari e Chrome)
   window.addEventListener('pageshow', function(e) {
-    if (e.persisted) {
+    if (e.persisted || checkCheckoutReturn()) {
       showPopup();
-    } else {
-      checkCheckoutReturn();
     }
   });
 
-  // Também verifica ao recuperar o foco da janela/aba
+  // Verifica quando a aba ganha foco novamente (caso o checkout tenha aberto em outra aba)
   window.addEventListener('focus', function() {
     checkCheckoutReturn();
   });
 
-  // Verificação imediata no carregamento do script
-  checkCheckoutReturn();
-
-  // 2. FORÇAR BACK-REDIRECT (Intercepta 100% das tentativas de voltar e força o popup)
-  function pushBackTrap() {
-    try {
-      window.history.pushState({ page: 'bodyman_trap' }, '', window.location.href);
-    } catch(e) {}
-  }
-
-  // Empurra estados no histórico
-  pushBackTrap();
-  pushBackTrap();
-
-  // Ao clicar em voltar no navegador ou gesto no celular:
-  window.addEventListener('popstate', function(e) {
-    // Re-injeta novo estado imediatamente para não permitir saída e força a exibição do popup
-    pushBackTrap();
-    showPopup();
-  });
-
-  // Re-injeta histórico em qualquer interação do usuário (toque, rolagem, clique)
-  var ensureTrap = function() {
-    pushBackTrap();
-  };
-  window.addEventListener('touchstart', ensureTrap, { passive: true });
-  window.addEventListener('scroll', ensureTrap, { passive: true });
-  window.addEventListener('click', ensureTrap, { passive: true });
-
-  // 3. Desktop Exit Intent (mouse saindo pelo topo da janela)
+  // 3. Desktop Exit Intent (mouse saindo da tela pelo topo)
   document.addEventListener('mouseleave', function(e) {
-    if (e.clientY <= 30) {
+    if (e.clientY <= 50) {
+      showPopup();
+    }
+  });
+  document.addEventListener('mouseout', function(e) {
+    if (!e.relatedTarget && e.clientY <= 50) {
       showPopup();
     }
   });
 
-  // 4. Mobile Exit Intent (gesto de puxar para baixo no topo da tela)
+  // 4. Mobile Exit Intent (puxar a tela para baixo no topo)
   var touchStartY = 0;
   document.addEventListener('touchstart', function(e) {
     if (e.touches && e.touches[0]) {
@@ -735,29 +757,37 @@ function scrollToComprar(){
     if (e.touches && e.touches[0]) {
       var touchY = e.touches[0].clientY;
       var scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-      if (scrollTop <= 0 && touchY > touchStartY + 80) {
+      if (scrollTop <= 0 && touchY > touchStartY + 70) {
         showPopup();
       }
     }
   }, { passive: true });
 
-  // 5. Mudança de aba / minimizar
+  // 5. Mudança de aba
   document.addEventListener('visibilitychange', function() {
     if (document.visibilityState === 'hidden') {
       showPopup();
     }
   });
 
-  // Fechar popup
-  var closeBtn = document.getElementById('exitPopupClose');
-  if (closeBtn) closeBtn.addEventListener('click', hidePopup);
-  var skipBtn = document.getElementById('exitPopupSkip');
-  if (skipBtn) skipBtn.addEventListener('click', hidePopup);
-  popup.addEventListener('click', function(e) {
-    if (e.target === popup) hidePopup();
-  });
+  // Botões de fechar
+  function bindCloseHandlers() {
+    var closeBtn = document.getElementById('exitPopupClose');
+    if (closeBtn) closeBtn.onclick = hidePopup;
+    var skipBtn = document.getElementById('exitPopupSkip');
+    if (skipBtn) skipBtn.onclick = hidePopup;
+    var p = document.getElementById('exitPopup');
+    if (p) {
+      p.onclick = function(e) {
+        if (e.target === p) hidePopup();
+      };
+    }
+  }
 
-  // Timer regressivo de 3 minutos
+  bindCloseHandlers();
+  document.addEventListener('DOMContentLoaded', bindCloseHandlers);
+
+  // Timer regressivo
   function startPopupTimer() {
     var timerEl = document.getElementById('popupTimer');
     if (!timerEl || timerInterval) return;
